@@ -1,3 +1,4 @@
+import { orderedBatches } from './concurrency.ts';
 import { collectPages, type Attachment, type Naming, type Row, type Target } from './core.ts';
 
 export interface ReadTable {
@@ -24,12 +25,12 @@ export async function readRows(table: ReadTable, target: Target, naming: Naming,
   if (ids.length !== new Set(ids).size) throw new Error('视图读取出现重复记录，可能正在发生变化，请刷新重试。');
   if (ids.length > 10000) throw new Error('当前超过一万条记录，请先在飞书缩小筛选范围。');
   const rows: Row[] = [];
-  for (const id of ids) {
-    signal?.throwIfAborted();
+  for await (const group of orderedBatches(ids, 4, async id => {
     const values = attachments(await table.getCellValue(target.fieldId, id));
+    signal?.throwIfAborted();
     const buyer = naming === 'buyer' && values.length ? await table.getCellString(buyerFieldId!, id) : '';
-    rows.push({id, buyer, attachments: values});
-  }
+    return {id, buyer, attachments: values};
+  }, signal)) rows.push(...group.map(item => item.result));
   signal?.throwIfAborted();
   // Detect row/filter/order changes during the read rather than exporting a mixed list.
   const finalIds = await collectPages(async pageToken => {

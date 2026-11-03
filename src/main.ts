@@ -31,6 +31,7 @@ root.innerHTML = `
     <div id="order-note" class="notice" hidden>此视图有分组。首次使用请展开下载清单核对上下顺序；当前版本尚待真实飞书验收。</div>
     <div class="actions"><button id="download" class="primary" disabled>一键下载</button><div class="sub-actions"><button id="preview" class="text-button" disabled>只读查看下载清单</button><button id="cancel" class="text-button" hidden>取消任务</button></div></div>
     <section id="status-box" class="card" aria-live="polite"><p id="status">正在初始化…</p><progress id="progress" max="1" value="0" hidden></progress></section>
+    <section id="failures-box" class="card error" hidden><h2>未完成的文件</h2><ul id="failures"></ul><p class="hint">请检查权限、网络或文件大小后重试。单文件上限 64 MiB。</p></section>
     <details id="manifest-box" class="card" hidden><summary>下载清单 <span id="manifest-count"></span></summary><ol id="manifest"></ol><p id="manifest-more" class="hint"></p></details>
     <footer>仅在本机处理 · 不修改记录与状态<br>单店铺直接成包 · 多店铺内含各店铺 ZIP<br>每包最多 20 个附件或约 64 MiB，超出自动分包</footer>
   </main>`;
@@ -137,7 +138,7 @@ function renderManifest(entries: Entry[]) {
     const li = document.createElement('li'); li.textContent = `${entry.tableName} / ${entry.viewName} / ${entry.filename}`; list.append(li);
   }
   el('manifest-count').textContent = `${entries.length} 个附件`;
-  el('manifest-more').textContent = entries.length > 200 ? '面板仅预览前 200 个，下载包含完整清单。' : '编号已按记录读取顺序确定，失败项不会导致后续文件重新编号。';
+  el('manifest-more').textContent = entries.length > 200 ? '面板仅预览前 200 个，实际处理全部附件。' : '编号已按记录读取顺序确定，失败项不会导致后续文件重新编号。';
   show('manifest-box', true);
 }
 async function saveZip(name: string, bytes: Uint8Array) {
@@ -145,10 +146,11 @@ async function saveZip(name: string, bytes: Uint8Array) {
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
   anchor.href = url; anchor.download = name; document.body.append(anchor); anchor.click(); anchor.remove();
   // Give the browser time to claim the Blob before releasing each batch.
-  await new Promise(resolve => setTimeout(resolve, 1500)); URL.revokeObjectURL(url);
+  await new Promise(resolve => setTimeout(resolve, 300)); URL.revokeObjectURL(url);
 }
 async function run(previewOnly: boolean) {
   if (busy || !current?.fieldId) return;
+  show('failures-box', false); el('failures').replaceChildren();
   busy = true; epoch++; controller = new AbortController(); controls();
   const signal = controller.signal;
   const tasks = [structuredClone(current), ...structuredClone(extras)];
@@ -173,7 +175,12 @@ async function run(previewOnly: boolean) {
     if (previewOnly) { status(`已读取 ${tasks.length} 个视图、${entries.length} 个附件；此操作未下载文件。`); el<HTMLDetailsElement>('manifest-box').open = true; return; }
     const progress = el<HTMLProgressElement>('progress'); progress.max = entries.length; progress.value = 0;
     const result = await downloadEntries(entries, {load: demoService ? demoService.demoLoad : service!.loadAttachment, save:saveZip, progress:(done,total,failed) => {progress.value = done; status(`处理 ${done}/${total} · 失败 ${failed} 个`);}}, signal, tasks);
-    status(`已打包 ${result.success} 个附件，失败 ${result.failed} 个，已发起 ${result.parts} 个 ZIP 下载。请检查浏览器下载列表；失败项见包内清单。`, result.failed > 0);
+    const failures = el('failures');
+    for (const item of result.failures) {
+      const li = document.createElement('li'); li.textContent = `${item.tableName} / ${item.viewName} / ${item.filename}`; failures.append(li);
+    }
+    show('failures-box', result.failures.length > 0);
+    status(`已打包 ${result.success} 个附件，失败 ${result.failed} 个，已发起 ${result.parts} 个 ZIP 下载。请检查浏览器下载列表；失败项在下方面板显示，压缩包不包含 TXT。`, result.failed > 0);
   } catch {
     status(signal.aborted ? '任务已取消。已发起的 ZIP 下载可能仍会完成，其余附件未继续处理。' : '任务未完成：请检查表格权限、目标列或筛选是否发生变化。可先用“只读查看下载清单”核对；不会退回下载整张表。', !signal.aborted);
   } finally {

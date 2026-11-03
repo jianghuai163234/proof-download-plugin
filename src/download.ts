@@ -1,4 +1,5 @@
-import { zipSync, strToU8 } from 'fflate';
+import { zipSync } from 'fflate';
+import { orderedBatches } from './concurrency.ts';
 import { safeSegment, type Entry, type Target } from './core.ts';
 
 export const MAX_FILE_BYTES = 64 * 1024 * 1024;
@@ -28,17 +29,18 @@ function archiveLayout(targets: Target[], entries: Entry[]) {
     }
     if (!shop.views.has(target.viewId)) {
       const label = target.viewName.includes('新收到校样') ? '新收到校样' : target.viewName.includes('修改') ? '修改' : target.viewName;
-      shop.views.set(target.viewId, uniqueLabel(label, new Set(['下载清单.txt', ...shop.views.values()].map(x => x.toLocaleLowerCase()))));
+      shop.views.set(target.viewId, uniqueLabel(label, new Set([...shop.views.values()].map(x => x.toLocaleLowerCase()))));
     }
   }
   return shops;
 }
 
-export async function downloadEntries(entries: Entry[], port: DownloadPort, signal: AbortSignal, targets: Target[] = []): Promise<{success: number; failed: number; parts: number}> {
+export async function downloadEntries(entries: Entry[], port: DownloadPort, signal: AbortSignal, targets: Target[] = []): Promise<{success: number; failed: number; parts: number; failures: {tableName: string; viewName: string; filename: string}[]}> {
   const layout = archiveLayout(targets, entries);
   const multipleShops = layout.size > 1;
   const singleShopName = layout.values().next().value?.name || '校样下载';
-  let batches = new Map<string, {files: Record<string, Uint8Array>; notes: string[]}>();
+  let batches = new Map<string, {files: Record<string, Uint8Array>}>();
+  const failures: {tableName: string; viewName: string; filename: string}[] = [];
   let bytes = 0, count = 0, part = 0, success = 0, failed = 0;
   const flush = async (hasMore: boolean) => {
     if (!batches.size) return;
@@ -46,7 +48,6 @@ export async function downloadEntries(entries: Entry[], port: DownloadPort, sign
     const outer: Record<string, Uint8Array> = {};
     let singleZip: Uint8Array | undefined;
     for (const [tableId, batch] of batches) {
-      batch.files['下载清单.txt'] = strToU8(batch.notes.join('\r\n'));
       const inner = zipSync(batch.files, {level: 0});
       batch.files = {};
       if (multipleShops) outer[`${layout.get(tableId)!.name}.zip`] = inner;
@@ -61,39 +62,38 @@ export async function downloadEntries(entries: Entry[], port: DownloadPort, sign
     await port.save(filename, zip);
     part++;
   };
-  for (const [i, entry] of entries.entries()) {
+  for await (const group of orderedBatches(entries, 2, async entry => {
+    try {
+      if (entry.size > MAX_FILE_BYTES) throw new Error('文件过大');
+      const data = await port.load(entry, signal);
+      signal.throwIfAborted();
+      if (data.byteLength > MAX_FILE_BYTES) throw new Error('文件过大');
+      return data;
+    } catch {
+      signal.throwIfAborted();
+      return null;
+    }
+  }, signal)) {
+   for (const {value: entry, index: i, result: data} of group) {
     signal.throwIfAborted();
     if (count >= 20 || (bytes && bytes + entry.size > MAX_BATCH_BYTES)) await flush(true);
     const shop = layout.get(entry.tableId)!;
     const path = shop.views.size > 1 ? `${shop.views.get(entry.viewId)!}/${entry.filename}` : entry.filename;
-    let data: Uint8Array | null = null;
-    try {
-      if (entry.size > MAX_FILE_BYTES) throw new Error('文件过大');
-      data = await port.load(entry, signal);
-      signal.throwIfAborted();
-      if (data.byteLength > MAX_FILE_BYTES) throw new Error('文件过大');
-    } catch {
-      signal.throwIfAborted();
-      data = null;
-      failed++;
-    }
     if (data && bytes && bytes + data.byteLength > MAX_BATCH_BYTES) await flush(true);
-    let batch = batches.get(entry.tableId);
-    if (!batch) {
-      batch = {files: {}, notes: ['附件下载清单（仅记录计划文件名，不记录临时下载链接）']};
-      batches.set(entry.tableId, batch);
-    }
     if (data) {
+      let batch = batches.get(entry.tableId);
+      if (!batch) { batch = {files: {}}; batches.set(entry.tableId, batch); }
       if (path in batch.files) throw new Error('文件名冲突，已停止打包。');
       batch.files[path] = data; bytes += data.byteLength; count++; success++;
-      batch.notes.push(`成功：${path}`);
     } else {
-      batch.notes.push(`失败：${path}（请检查下载权限、文件大小或网络后重试；单文件上限 64 MiB）`);
+      failed++;
+      failures.push({tableName: entry.tableName, viewName: entry.viewName, filename: entry.filename});
     }
     port.progress?.(i + 1, entries.length, failed);
   }
+  }
   await flush(false);
-  return {success, failed, parts: part};
+  return {success, failed, parts: part, failures};
 }
 
 export async function fetchBytes(url: string, signal: AbortSignal): Promise<Uint8Array> {

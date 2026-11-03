@@ -26,7 +26,7 @@ test('cancellation stops reads',async()=>{
  const c=new AbortController();c.abort();
  await assert.rejects(readRows(tableStub(),target,'image',undefined,c.signal),{name:'AbortError'});
 });
-test('download failure preserves planned names and creates failure list without URLs',async()=>{
+test('download failure preserves planned names and returns panel failures without URLs',async()=>{
  const entries=makeManifest(target,[{id:'r',buyer:'张三',attachments:[{name:'a.png',token:'a',size:1},{name:'b.png',token:'b',size:1},{name:'c.png',token:'c',size:1}]}],'image');
  const archives:Uint8Array[]=[];
  const result=await downloadEntries(entries,{
@@ -38,7 +38,9 @@ test('download failure preserves planned names and creates failure list without 
  assert.ok(Object.keys(files).some(x=>x === 'image1.png'));
  assert.ok(Object.keys(files).some(x=>x === 'image3.png'));
  assert.equal(Object.keys(files).some(x=>x === 'image2.png'),false);
- assert.equal(new TextDecoder().decode(files['下载清单.txt']).includes('secret=x'),false);
+ assert.equal('下载清单.txt' in files,false);
+ assert.deepEqual(result.failures,[{tableName:'Mike',viewName:'修改',filename:'image2.png'}]);
+ assert.equal(JSON.stringify(result.failures).includes('secret=x'),false);
 });
 test('batch limits and cancellation prevent subsequent saves',async()=>{
  const entries=makeManifest(target,[{id:'r',buyer:'a',attachments:[{name:'a.jpg',token:'a',size:1},{name:'b.jpg',token:'b',size:1}]}],'image');
