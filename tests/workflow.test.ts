@@ -35,9 +35,9 @@ test('download failure preserves planned names and creates failure list without 
  },new AbortController().signal);
  assert.equal(result.success,2); assert.equal(result.failed,1);
  const files=unzipSync(archives[0]);
- assert.ok(Object.keys(files).some(x=>x.endsWith('/image1.png')));
- assert.ok(Object.keys(files).some(x=>x.endsWith('/image3.png')));
- assert.equal(Object.keys(files).some(x=>x.endsWith('/image2.png')),false);
+ assert.ok(Object.keys(files).some(x=>x === 'image1.png'));
+ assert.ok(Object.keys(files).some(x=>x === 'image3.png'));
+ assert.equal(Object.keys(files).some(x=>x === 'image2.png'),false);
  assert.equal(new TextDecoder().decode(files['下载清单.txt']).includes('secret=x'),false);
 });
 test('batch limits and cancellation prevent subsequent saves',async()=>{

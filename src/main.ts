@@ -32,7 +32,7 @@ root.innerHTML = `
     <div class="actions"><button id="download" class="primary" disabled>一键下载</button><div class="sub-actions"><button id="preview" class="text-button" disabled>只读查看下载清单</button><button id="cancel" class="text-button" hidden>取消任务</button></div></div>
     <section id="status-box" class="card" aria-live="polite"><p id="status">正在初始化…</p><progress id="progress" max="1" value="0" hidden></progress></section>
     <details id="manifest-box" class="card" hidden><summary>下载清单 <span id="manifest-count"></span></summary><ol id="manifest"></ol><p id="manifest-more" class="hint"></p></details>
-    <footer>仅在本机处理 · 不修改记录与状态<br>每包最多 20 个附件或约 64 MiB，超出自动分包</footer>
+    <footer>仅在本机处理 · 不修改记录与状态<br>单店铺直接成包 · 多店铺内含各店铺 ZIP<br>每包最多 20 个附件或约 64 MiB，超出自动分包</footer>
   </main>`;
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -172,7 +172,7 @@ async function run(previewOnly: boolean) {
     if (!entries.length) { status('当前筛选结果没有目标附件，未生成下载文件。'); return; }
     if (previewOnly) { status(`已读取 ${tasks.length} 个视图、${entries.length} 个附件；此操作未下载文件。`); el<HTMLDetailsElement>('manifest-box').open = true; return; }
     const progress = el<HTMLProgressElement>('progress'); progress.max = entries.length; progress.value = 0;
-    const result = await downloadEntries(entries, {load: demoService ? demoService.demoLoad : service!.loadAttachment, save:saveZip, progress:(done,total,failed) => {progress.value = done; status(`处理 ${done}/${total} · 失败 ${failed} 个`);}}, signal);
+    const result = await downloadEntries(entries, {load: demoService ? demoService.demoLoad : service!.loadAttachment, save:saveZip, progress:(done,total,failed) => {progress.value = done; status(`处理 ${done}/${total} · 失败 ${failed} 个`);}}, signal, tasks);
     status(`已打包 ${result.success} 个附件，失败 ${result.failed} 个，已发起 ${result.parts} 个 ZIP 下载。请检查浏览器下载列表；失败项见包内清单。`, result.failed > 0);
   } catch {
     status(signal.aborted ? '任务已取消。已发起的 ZIP 下载可能仍会完成，其余附件未继续处理。' : '任务未完成：请检查表格权限、目标列或筛选是否发生变化。可先用“只读查看下载清单”核对；不会退回下载整张表。', !signal.aborted);
