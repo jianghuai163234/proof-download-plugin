@@ -3,7 +3,10 @@ import { orderedBatches } from './concurrency.ts';
 import { safeSegment, type Entry, type Target } from './core.ts';
 
 export const MAX_FILE_BYTES = 64 * 1024 * 1024;
-const MAX_BATCH_BYTES = 64 * 1024 * 1024;
+export const MAX_BATCH_BYTES = 500 * 1024 * 1024;
+export function exceedsBatchLimit(currentBytes: number, nextBytes: number): boolean {
+  return currentBytes > 0 && currentBytes + nextBytes > MAX_BATCH_BYTES;
+}
 export interface DownloadPort {
   load(entry: Entry, signal: AbortSignal): Promise<Uint8Array>;
   save(name: string, bytes: Uint8Array): Promise<void>;
@@ -41,7 +44,7 @@ export async function downloadEntries(entries: Entry[], port: DownloadPort, sign
   const singleShopName = layout.values().next().value?.name || '校样下载';
   let batches = new Map<string, {files: Record<string, Uint8Array>}>();
   const failures: {tableName: string; viewName: string; filename: string}[] = [];
-  let bytes = 0, count = 0, part = 0, success = 0, failed = 0;
+  let bytes = 0, part = 0, success = 0, failed = 0;
   const flush = async (hasMore: boolean) => {
     if (!batches.size) return;
     signal.throwIfAborted();
@@ -54,7 +57,7 @@ export async function downloadEntries(entries: Entry[], port: DownloadPort, sign
       else singleZip = inner;
     }
     const zip = multipleShops ? zipSync(outer, {level: 0}) : singleZip!;
-    batches = new Map(); bytes = 0; count = 0;
+    batches = new Map(); bytes = 0;
     const numbered = part > 0 || hasMore;
     const baseName = multipleShops ? '校样下载' : singleShopName;
     const filename = `${baseName}${numbered ? `_${part + 1}` : ''}.zip`;
@@ -62,7 +65,7 @@ export async function downloadEntries(entries: Entry[], port: DownloadPort, sign
     await port.save(filename, zip);
     part++;
   };
-  for await (const group of orderedBatches(entries, 2, async entry => {
+  for await (const group of orderedBatches(entries, 6, async entry => {
     try {
       if (entry.size > MAX_FILE_BYTES) throw new Error('文件过大');
       const data = await port.load(entry, signal);
@@ -76,15 +79,14 @@ export async function downloadEntries(entries: Entry[], port: DownloadPort, sign
   }, signal)) {
    for (const {value: entry, index: i, result: data} of group) {
     signal.throwIfAborted();
-    if (count >= 20 || (bytes && bytes + entry.size > MAX_BATCH_BYTES)) await flush(true);
     const shop = layout.get(entry.tableId)!;
     const path = shop.views.size > 1 ? `${shop.views.get(entry.viewId)!}/${entry.filename}` : entry.filename;
-    if (data && bytes && bytes + data.byteLength > MAX_BATCH_BYTES) await flush(true);
+    if (data && exceedsBatchLimit(bytes, data.byteLength)) await flush(true);
     if (data) {
       let batch = batches.get(entry.tableId);
       if (!batch) { batch = {files: {}}; batches.set(entry.tableId, batch); }
       if (path in batch.files) throw new Error('文件名冲突，已停止打包。');
-      batch.files[path] = data; bytes += data.byteLength; count++; success++;
+      batch.files[path] = data; bytes += data.byteLength; success++;
     } else {
       failed++;
       failures.push({tableName: entry.tableName, viewName: entry.viewName, filename: entry.filename});

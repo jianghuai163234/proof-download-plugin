@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { unzipSync } from 'fflate';
 import { makeManifest, type Target } from '../src/core.ts';
-import { downloadEntries } from '../src/download.ts';
+import { downloadEntries, MAX_BATCH_BYTES, exceedsBatchLimit } from '../src/download.ts';
 const shop:Target={tableId:'t1',tableName:'Jesse店订单',viewId:'v1',viewName:'（客服）新收到校样',fieldId:'f'};
 function entries(t:Target,count=1){return makeManifest(t,[{id:'r',buyer:'张三',attachments:Array.from({length:count},(_,i)=>({token:`a${i}`,name:'a.jpg',size:1}))}],'image');}
 async function run(targets:Target[],counts=targets.map(()=>1)){
@@ -32,10 +32,17 @@ test('selected empty view still determines folder structure',async()=>{
  const [out]=await run([shop,{...shop,viewId:'v2',viewName:'修改'}],[1,0]);
  assert.ok(out.files['新收到校样/image1.jpg']);
 });
-test('split ZIP filenames are numbered and planned image numbers stay unchanged',async()=>{
- const out=await run([shop],[21]);
- assert.deepEqual(out.map(x=>x.name),['Jesse店订单_1.zip','Jesse店订单_2.zip']);
- assert.ok(out[0].files['image20.jpg']);assert.ok(out[1].files['image21.jpg']);
+test('50 files remain in one ZIP with original numbering',async()=>{
+ const out=await run([shop],[50]);
+ assert.deepEqual(out.map(x=>x.name),['Jesse店订单.zip']);
+ assert.equal(Object.keys(out[0].files).length,50);
+ assert.ok(out[0].files['image50.jpg']);
+});
+test('batch boundary is 500 MiB and splits only when actual total exceeds it',()=>{
+ assert.equal(MAX_BATCH_BYTES,500*1024*1024);
+ assert.equal(exceedsBatchLimit(MAX_BATCH_BYTES-1,1),false);
+ assert.equal(exceedsBatchLimit(MAX_BATCH_BYTES,1),true);
+ assert.equal(exceedsBatchLimit(0,1),false);
 });
 test('sanitized or repeated shop and view names never overwrite archives',async()=>{
  const other={...shop,tableId:'t2',tableName:'Jesse店订单'};

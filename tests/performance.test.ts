@@ -5,12 +5,12 @@ import { makeManifest } from '../src/core.ts';
 import { downloadEntries } from '../src/download.ts';
 import { readRows, type ReadTable } from '../src/reader.ts';
 const target={tableId:'t',viewId:'v',tableName:'店铺',viewName:'修改',fieldId:'f'};
-const entries=()=>makeManifest(target,[{id:'r',buyer:'买家',attachments:Array.from({length:4},(_,i)=>({name:'a.jpg',token:`t${i}`,size:1}))}],'image');
-test('download overlaps two files, bounds concurrency, and preserves planned ZIP order',async()=>{
+const entries=(count=4)=>makeManifest(target,[{id:'r',buyer:'买家',attachments:Array.from({length:count},(_,i)=>({name:'a.jpg',token:`t${i}`,size:1}))}],'image');
+test('download overlaps six files, bounds concurrency, and preserves planned ZIP order',async()=>{
  let active=0,max=0;const output:Uint8Array[]=[];
- await downloadEntries(entries(),{load:async e=>{active++;max=Math.max(max,active);await new Promise(r=>setTimeout(r,e.index===1?12:1));active--;return new Uint8Array([e.index]);},save:async(_n,b)=>{output.push(b);}},new AbortController().signal);
- assert.equal(max,2);assert.equal(active,0);
- const files=unzipSync(output[0]);assert.deepEqual(Object.keys(files),['image1.jpg','image2.jpg','image3.jpg','image4.jpg']);
+ await downloadEntries(entries(8),{load:async e=>{active++;max=Math.max(max,active);await new Promise(r=>setTimeout(r,e.index===1?12:1));active--;return new Uint8Array([e.index]);},save:async(_n,b)=>{output.push(b);}},new AbortController().signal);
+ assert.equal(max,6);assert.equal(active,0);
+ const files=unzipSync(output[0]);assert.deepEqual(Object.keys(files),Array.from({length:8},(_,i)=>`image${i+1}.jpg`));
  assert.deepEqual(Array.from(files['image1.jpg']),[1]);
 });
 test('all failures return panel-safe names and never generate empty ZIP or TXT',async()=>{
