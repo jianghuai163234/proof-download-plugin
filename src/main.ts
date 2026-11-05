@@ -14,6 +14,7 @@ root.innerHTML = `
       <div class="section-top"><span class="eyebrow">当前页面</span><button id="refresh" class="text-button">刷新识别</button></div>
       <h2 id="shop">正在连接飞书…</h2><p id="view" class="muted">读取当前视图</p>
       <label for="field">下载附件列</label><select id="field" aria-label="下载附件列"></select>
+      <p id="current-fields" class="hint"></p>
       <p class="hint">跟随你在飞书中设置的筛选，空附件自动跳过。</p>
     </section>
     <section class="card">
@@ -26,6 +27,7 @@ root.innerHTML = `
       <label for="search">查找店铺</label><input id="search" type="search" placeholder="输入店铺名称">
       <label for="table-select">店铺</label><select id="table-select"></select>
       <label for="view-select">视图</label><select id="view-select"></select>
+      <label>附件列（可多选）</label><div id="extra-fields"></div>
       <button id="add" class="secondary">＋ 添加到本次下载</button><ul id="targets" class="targets"></ul>
     </details>
     <div id="order-note" class="notice" hidden>此视图有分组。首次使用请展开下载清单核对上下顺序；当前版本尚待真实飞书验收。</div>
@@ -33,7 +35,7 @@ root.innerHTML = `
     <section id="status-box" class="card" aria-live="polite"><p id="status">正在初始化…</p><progress id="progress" max="1" value="0" hidden></progress></section>
     <section id="failures-box" class="card error" hidden><h2>未完成的文件</h2><ul id="failures"></ul><p class="hint">请检查权限、网络或文件大小后重试。单文件上限 64 MiB。</p></section>
     <details id="manifest-box" class="card" hidden><summary>下载清单 <span id="manifest-count"></span></summary><ol id="manifest"></ol><p id="manifest-more" class="hint"></p></details>
-    <footer>仅在本机处理 · 不修改记录与状态<br>单店铺直接成包 · 多店铺内含各店铺 ZIP<br>每包最多 20 个附件或约 64 MiB，超出自动分包</footer>
+    <footer>仅在本机处理 · 不修改记录与状态<br>单店铺直接成包 · 多店铺内含各店铺 ZIP<br>每包附件合计最多 500 MiB，超出自动分包</footer>
   </main>`;
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -49,6 +51,8 @@ let naming = savedNaming();
 let current: Context | null = null;
 let extras: Context[] = [];
 let tables: Choice[] = [];
+let extraContext: Context | null = null;
+let fieldEpoch = 0;
 let busy = false, epoch = 0, viewEpoch = 0;
 let controller: AbortController | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -61,11 +65,13 @@ async function context(tableId?: string, viewId?: string) {
   return service.getContext(tableId, viewId);
 }
 function controls() {
+  el('current-fields').textContent = current ? '已选附件列：' + current.fields.filter(f => (current!.fieldIds || [current!.fieldId]).includes(f.id)).map(f => f.name).join('、') : '';
   const ready = Boolean(current?.fieldId) && (naming === 'image' || Boolean(current?.buyerFieldId));
   el<HTMLButtonElement>('download').disabled = busy || !ready;
   el<HTMLButtonElement>('preview').disabled = busy || !ready;
   for (const item of root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input,select,#add,#refresh')) item.disabled = busy;
   for (const item of root.querySelectorAll<HTMLButtonElement>('#targets button')) item.disabled = busy;
+  el<HTMLButtonElement>('add').disabled = busy || !extraContext || !root.querySelector('#extra-fields input:checked');
   show('cancel', busy); show('buyer-box', naming === 'buyer');
 }
 async function refresh() {
@@ -77,6 +83,7 @@ async function refresh() {
     if (version !== epoch || busy) return;
     if (current?.tableId === next.tableId && current.viewId === next.viewId) {
       if (next.fields.some(f => f.id === current?.fieldId)) next.fieldId = current.fieldId;
+      if (current.fieldIds?.every(id => next.fields.some(f => f.id === id))) next.fieldIds = current.fieldIds;
       if (next.buyerFields.some(f => f.id === current?.buyerFieldId)) next.buyerFieldId = current.buyerFieldId;
     }
     current = next;
@@ -99,7 +106,7 @@ function renderExtras() {
   const list = el('targets'); list.replaceChildren();
   for (const [i, item] of extras.entries()) {
     const li = document.createElement('li'); const title = document.createElement('span');
-    title.textContent = `${item.tableName} / ${item.viewName}`;
+    title.textContent = `${item.tableName} / ${item.viewName} / ${item.fields.filter(f => (item.fieldIds || [item.fieldId]).includes(f.id)).map(f => f.name).join('、')}`;
     const remove = document.createElement('button'); remove.textContent = '移除'; remove.className = 'text-button';
     remove.disabled = busy; remove.onclick = () => { extras.splice(i, 1); renderExtras(); };
     li.append(title, remove); list.append(li);
@@ -113,24 +120,51 @@ function filterTables() {
 }
 async function loadViews() {
   const version = ++viewEpoch, tableId = el<HTMLSelectElement>('table-select').value;
+  fieldEpoch++; extraContext = null; el('extra-fields').replaceChildren(); controls();
   options('view-select', [], undefined, '正在读取视图…');
   if (!tableId) return;
   try {
     const values = demoService ? demoService.demoViews : await service!.getViews(tableId);
     if (version !== viewEpoch) return;
     options('view-select', values, values.find(v => v.name.includes('新收到校样') || v.name.includes('修改'))?.id);
+    await loadExtraFields();
   } catch { if (version === viewEpoch) { options('view-select', [], undefined, '读取失败'); status('无法读取该店铺的视图，请检查权限。', true); } }
 }
-async function addExtra() {
+async function loadExtraFields() {
+  const version = ++fieldEpoch;
+  extraContext = null; el('extra-fields').replaceChildren(); controls();
   const tableId = el<HTMLSelectElement>('table-select').value, viewId = el<HTMLSelectElement>('view-select').value;
-  if (!tableId || !viewId || busy) return;
+  if (!tableId || !viewId) return;
   try {
     const item = await context(tableId, viewId);
-    if (busy) return;
-    if (!item.fieldId) throw new Error('该视图未匹配到校样1或最新校样，请先在该视图中下载。');
-    if ((current?.tableId === tableId && current.viewId === viewId) || extras.some(e => e.tableId === tableId && e.viewId === viewId)) { status('该视图已经在下载范围中。'); return; }
-    extras.push(item); renderExtras(); status('已添加，点击一键下载将按列表顺序处理。');
-  } catch { status('添加失败：请确认该视图可读取，且含对应的校样附件列。', true); }
+    if (version !== fieldEpoch) return;
+    extraContext = item;
+    for (const field of item.fields) {
+      const label = document.createElement('label'), input = document.createElement('input');
+      input.type = 'checkbox'; input.value = field.id; input.checked = field.id === item.fieldId;
+      input.onchange = controls;
+      label.append(input, document.createTextNode(field.name)); el('extra-fields').append(label);
+    }
+    if (!item.fields.length) status('该视图没有可读取的附件列。', true);
+  } catch { if (version === fieldEpoch) status('附件列读取失败，请检查该视图的权限。', true); }
+  controls();
+}
+async function addExtra() {
+  if (!extraContext || busy) return;
+  const fieldIds = [...root.querySelectorAll<HTMLInputElement>('#extra-fields input:checked')].map(input => input.value);
+  if (!fieldIds.length) return;
+  const item = structuredClone(extraContext);
+  item.fieldIds = fieldIds; item.fieldId = fieldIds[0];
+  if (current?.tableId === item.tableId && current.viewId === item.viewId) {
+    current.fieldIds = fieldIds; current.fieldId = fieldIds[0];
+    options('field', current.fields, current.fieldId);
+    status('已更新当前视图的附件列选择。');
+  } else {
+    const index = extras.findIndex(e => e.tableId === item.tableId && e.viewId === item.viewId);
+    if (index < 0) extras.push(item); else extras[index] = item;
+    status('已添加／更新该视图，点击一键下载将按列表顺序处理。');
+  }
+  renderExtras(); controls();
 }
 function renderManifest(entries: Entry[]) {
   const list = el('manifest'); list.replaceChildren();
@@ -164,7 +198,7 @@ async function run(previewOnly: boolean) {
     for (const [i, task] of tasks.entries()) {
       signal.throwIfAborted(); status(`读取 ${i + 1}/${tasks.length}：${task.tableName} · ${task.viewName}`);
       const fresh = await context(task.tableId, task.viewId);
-      if (!fresh.fields.some(f => f.id === task.fieldId)) throw new Error('附件列已变化');
+      if (!(task.fieldIds || [task.fieldId]).every(id => fresh.fields.some(f => f.id === id))) throw new Error('附件列已变化');
       if (taskNaming === 'buyer' && !fresh.buyerFields.some(f => f.id === task.buyerFieldId)) throw new Error('买家姓名列不可用');
       const rows = demoService ? await demoService.demoRows(task, taskNaming, signal) : await service!.readContextRows(task, taskNaming, signal);
       entries.push(...makeManifest(task, rows, taskNaming));
@@ -198,10 +232,11 @@ for (const radio of root.querySelectorAll<HTMLInputElement>('input[name="naming"
   radio.checked = radio.value === naming;
   radio.onchange = () => { naming = radio.value as Naming; try { localStorage.setItem('attachment-downloader.naming', naming); } catch { /* Storage may be restricted by the host. */ } controls(); show('manifest-box', false); };
 }
-el<HTMLSelectElement>('field').onchange = () => { if (current) current.fieldId = el<HTMLSelectElement>('field').value; controls(); show('manifest-box', false); };
+el<HTMLSelectElement>('field').onchange = () => { if (current) { current.fieldId = el<HTMLSelectElement>('field').value; current.fieldIds = undefined; } controls(); show('manifest-box', false); };
 el<HTMLSelectElement>('buyer').onchange = () => { if (current) current.buyerFieldId = el<HTMLSelectElement>('buyer').value; controls(); show('manifest-box', false); };
 el('refresh').onclick = () => void refresh();
 el('search').oninput = filterTables; el('table-select').onchange = () => void loadViews();
+el('view-select').onchange = () => void loadExtraFields();
 el('add').onclick = () => void addExtra();
 el('preview').onclick = () => void run(true); el('download').onclick = () => void run(false);
 el('cancel').onclick = () => controller?.abort();

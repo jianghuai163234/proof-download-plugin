@@ -8,11 +8,12 @@ export async function demoContext(tableId = 'demo-mike', viewId = 'demo-change')
 }
 export async function demoRows(_context: Context, _naming: Naming, signal: AbortSignal): Promise<Row[]> {
   signal.throwIfAborted();
-  return [
+  const rows: Row[] = [
     {id:'r1',buyer:'示例买家A',attachments:[{name:'sample.svg',token:'a',size:200}]},
     {id:'r2',buyer:'示例买家B',attachments:[]},
     {id:'r3',buyer:'示例买家C',attachments:[{name:'sample.svg',token:'b',size:200},{name:'sample.svg',token:'c',size:200}]},
   ];
+  return rows.map(row => ({...row, attachments: (_context.fieldIds || [_context.fieldId]).flatMap(fieldId => row.attachments.map(a => ({...a, fieldId})))}));
 }
 export async function demoLoad(entry: Entry, signal: AbortSignal): Promise<Uint8Array> {
   signal.throwIfAborted();

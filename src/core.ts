@@ -1,8 +1,8 @@
 export type Naming = 'image' | 'buyer';
-export interface Attachment { name: string; token: string; size: number; type?: string }
+export interface Attachment { name: string; token: string; size: number; type?: string; fieldId?: string }
 export interface Row { id: string; buyer: string; attachments: Attachment[] }
-export interface Target { tableId: string; viewId: string; tableName: string; viewName: string; fieldId: string }
-export interface Entry extends Attachment, Target { recordId: string; filename: string; folder: string; index: number }
+export interface Target { tableId: string; viewId: string; tableName: string; viewName: string; fieldId: string; fieldIds?: string[] }
+export interface Entry extends Omit<Attachment, 'fieldId'>, Target { recordId: string; filename: string; folder: string; index: number }
 
 export function inferAttachmentField(view: string): string | null {
   if (view.includes('新收到校样')) return '校样1';

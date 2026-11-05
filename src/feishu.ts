@@ -20,9 +20,13 @@ export async function getContext(tableId?: string, viewId?: string): Promise<Con
   if (!selectedTable || !selectedView) throw new Error('请先打开店铺的表格视图，再刷新识别。仪表盘不支持直接下载。');
   const table = await bitable.base.getTableById(selectedTable);
   const view = await table.getViewById(selectedView);
-  const [tableName, meta, fields] = await Promise.all([table.getName(), view.getMeta(), table.getFieldMetaList()]);
+  const [tableName, meta, fields, viewFields] = await Promise.all([table.getName(), view.getMeta(), table.getFieldMetaList(), view.getFieldMetaList()]);
   if (meta.type !== ViewType.Grid) throw new Error('目前仅支持表格视图，请切换到店铺订单表格。');
-  const candidates = fields.filter(f => f.type === FieldType.Attachment).map(f => ({id: f.id, name: f.name}));
+  const columnIds = viewFields.map(f => f.id);
+  const candidates = fields.filter(f => f.type === FieldType.Attachment).sort((a, b) => {
+    const rank = (id: string) => columnIds.includes(id) ? columnIds.indexOf(id) : columnIds.length;
+    return rank(a.id) - rank(b.id);
+  }).map(f => ({id: f.id, name: f.name}));
   const buyerFields = fields.filter(f => f.type === FieldType.Text).map(f => ({id: f.id, name: f.name}));
   const expected = inferAttachmentField(meta.name);
   const matching = candidates.filter(f => f.name.trim() === expected);

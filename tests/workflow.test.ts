@@ -57,3 +57,17 @@ test('changing filtered order during read stops export',async()=>{
  table.getRecordIdListByPage=async()=>({recordIds:++calls===1?['r2','r1']:['r1','r2'],hasMore:false});
  await assert.rejects(readRows(table,target,'image'),/发生变化/);
 });
+
+test('multiple attachment columns preserve row order, column order and source field IDs',async()=>{
+ const table: ReadTable = {
+  getRecordIdListByPage:async()=>({recordIds:['r2','r1'],hasMore:false}),
+  getCellValue:async(field,id)=>[{token:id+field,name:'x.jpg',size:1}],
+  getCellString:async()=> '买家'
+ };
+ const target={tableId:'t',tableName:'店',viewId:'v',viewName:'修改',fieldId:'f1',fieldIds:['f1','f2']};
+ const rows=await readRows(table,target,'image');
+ assert.deepEqual(rows.flatMap(r=>r.attachments.map(a=>a.token)),['r2f1','r2f2','r1f1','r1f2']);
+ const list=makeManifest(target,rows,'image');
+ assert.deepEqual(list.map(e=>e.fieldId),['f1','f2','f1','f2']);
+ assert.deepEqual(list.map(e=>e.filename),['image1.jpg','image2.jpg','image3.jpg','image4.jpg']);
+});

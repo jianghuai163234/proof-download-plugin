@@ -26,7 +26,11 @@ export async function readRows(table: ReadTable, target: Target, naming: Naming,
   if (ids.length > 10000) throw new Error('当前超过一万条记录，请先在飞书缩小筛选范围。');
   const rows: Row[] = [];
   for await (const group of orderedBatches(ids, 4, async id => {
-    const values = attachments(await table.getCellValue(target.fieldId, id));
+    const values: Attachment[] = [];
+    for (const fieldId of target.fieldIds || [target.fieldId]) {
+      signal?.throwIfAborted();
+      values.push(...attachments(await table.getCellValue(fieldId, id)).map(a => ({...a, fieldId})));
+    }
     signal?.throwIfAborted();
     const buyer = naming === 'buyer' && values.length ? await table.getCellString(buyerFieldId!, id) : '';
     return {id, buyer, attachments: values};
